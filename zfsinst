@@ -1,7 +1,5 @@
 #!/bin/sh
 
-# $Id$
-
 # LiveCD:
 #
 #   # ifconfig re0 up
@@ -17,10 +15,10 @@ if df | grep -q ^z/; then
 fi
 
 if [ "$1" = "-n" ]; then
-  doit=true
+  noprompt=true
   shift
 else
-  doit=false
+  noprompt=false
 fi
 
 gpart=/sbin/gpart
@@ -28,17 +26,14 @@ zpool=/sbin/zpool
 zfs=/sbin/zfs
 chroot=/usr/sbin/chroot
 
-mirror=false
-raid=false
+type="single"
 
 if [ ! -c /dev/ada0 ]; then
   echo "ERROR: no ada0: I don't know where to install." >&2
   kill $$
 elif [ -c /dev/ada2 ]; then
-  raid=true
   type="raid"
 elif [ -c /dev/ada1 ]; then
-  mirror=true
   type="mirror"
 fi
 
@@ -46,7 +41,7 @@ fi
 
 disklist=""
 swaplist=""
-for ada in /dev/ada?; do
+for ada in /dev/ada[0-9] /dev/ada[0-9][0-9]; do
   i=${ada##*/}
   i=${i##*[a-z]}
   if [ -c "/dev/ada${i}" ]; then
@@ -67,41 +62,27 @@ for ada in /dev/ada?; do
   fi
 done
 
-# $gpart destroy -F ada0
-# $mirror && $gpart destroy -F ada1
-# $raid   && $gpart destroy -F ada2
-# $gpart create -s gpt ada0
-# $mirror && $gpart create -s gpt ada1
-# $raid   && $gpart create -s gpt ada2
-# $gpart add -b 34 -s 64k -t freebsd-boot ada0
-# $mirror && $gpart add -b 34 -s 64k -t freebsd-boot ada1
-# $raid   && $gpart add -b 34 -s 64k -t freebsd-boot ada2
-# $gpart add -s 4G -t freebsd-swap -l swap0 ada0
-# $mirror && $gpart add -s 4G -t freebsd-swap -l swap1 ada1
-# $raid   && $gpart add -s 4G -t freebsd-swap -l swap2 ada2
-# $gpart add -t freebsd-zfs -l disk0 ada0
-# $mirror && $gpart add -t freebsd-zfs -l disk1 ada1
-# $raid   && $gpart add -t freebsd-zfs -l disk2 ada2
-# $gpart bootcode -b /boot/pmbr -p /boot/gptzfsboot -i 1 ada0
-# $mirror && $gpart bootcode -b /boot/pmbr -p /boot/gptzfsboot -i 1 ada1
-# $raid   && $gpart bootcode -b /boot/pmbr -p /boot/gptzfsboot -i 1 ada2
-
-$doit && echo ">> Partitions/boot done, ready to start ZFS... "
-$doit || read -p ">> Partitions/boot done, ready to start ZFS... (hit Enter) " junk
+$noprompt && echo ">> Partitions/boot done, ready to start ZFS... "
+$noprompt || read -p ">> Partitions/boot done, ready to start ZFS... (hit Enter) " junk
 echo ">> Disks: $disklist"
 
 /sbin/sysctl kern.geom.debugflags=0x10
 /sbin/kldload zfs
-if $raid; then
-  $zpool create -f -o altroot=/mnt -o cachefile=/tmp/zpool.cache z raidz $disklist
-elif $mirror; then
-  $zpool create -f -o altroot=/mnt -o cachefile=/tmp/zpool.cache z raidz $disklist
-else
-  $zpool create -f -o altroot=/mnt -o cachefile=/tmp/zpool.cache z $disklist
-fi
+case "$type" in
+  raid)
+	$zpool create -f -o altroot=/mnt -o cachefile=/tmp/zpool.cache z raidz $disklist
+	;;
+  mirror)
+	#$zpool create -f -o altroot=/mnt -o cachefile=/tmp/zpool.cache z mirror $disklist
+	$zpool create -f -o altroot=/mnt -o cachefile=/tmp/zpool.cache z raidz $disklist
+	;;
+  *)
+	$zpool create -f -o altroot=/mnt -o cachefile=/tmp/zpool.cache z $disklist
+	;;
+esac
 
-$doit && echo ">> ZFS started, ready to create datasets... " 
-$doit || read -p ">> ZFS started, ready to create datasets... (hit Enter) " junk
+$noprompt && echo ">> ZFS started, ready to create datasets... " 
+$noprompt || read -p ">> ZFS started, ready to create datasets... (hit Enter) " junk
 
 set -x
 
@@ -130,8 +111,8 @@ $zfs set readonly=on z/var/empty
 
 set +x
 
-$doit && echo ">> ZFS prep done, ready to extract freebsd-dist... " 
-$doit || read -p ">> ZFS prep done, ready to extract freebsd-dist... (hit Enter) " junk
+$noprompt && echo ">> ZFS prep done, ready to extract freebsd-dist... " 
+$noprompt || read -p ">> ZFS prep done, ready to extract freebsd-dist... (hit Enter) " junk
 
 #ls /usr/freebsd-dist/*.txz | xargs -n 1 tar zxvf
 
@@ -205,8 +186,8 @@ $chroot /mnt tzsetup America/Toronto
 echo ">> Making aliases..."
 $chroot /mnt sh -c "cd /etc/mail; make aliases"
 
-$doit && echo ">> Finishing up..."
-$doit || read -p ">> Ready to finish up? (hit Enter) " junk
+$noprompt && echo ">> Finishing up..."
+$noprompt || read -p ">> Ready to finish up? (hit Enter) " junk
 
 echo ">> Datasets created, copying zpool.cache..."
 cp -p /tmp/zpool.cache /mnt/boot/zfs/
