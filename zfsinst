@@ -24,20 +24,29 @@ fi
 gpart=/sbin/gpart
 zpool=/sbin/zpool
 zfs=/sbin/zfs
+gnop=/sbin/gnop
 chroot=/usr/sbin/chroot
 
-type="single"
+vdevtype=""
 
 if [ ! -c /dev/ada0 ]; then
   echo "ERROR: no ada0: I don't know where to install." >&2
   kill $$
 elif [ -c /dev/ada2 ]; then
-  type="raid"
+  vdevtype="raid"
 elif [ -c /dev/ada1 ]; then
-  type="mirror"
+  vdevtype="mirror"
 fi
 
-/sbin/kldstat -q -m zfs && /sbin/kldunload zfs
+if /sbin/kldstat -q -m zfs; then
+  if $zpool status | grep -q "pool:"; then
+    if ! $zpool export $($zpool status | awk '$1=="pool:"{print $2;exit}'); then
+      echo "ERROR: can't nuke existing pool." >&2
+      kill $$
+    fi
+  fi
+  /sbin/kldunload zfs
+fi
 
 disklist=""
 swaplist=""
@@ -53,10 +62,11 @@ for ada in /dev/ada[0-9] /dev/ada[0-9][0-9]; do
     esac
     $gpart destroy -F ada${i} || /bin/true
     $gpart create -s gpt ada${i}
-    $gpart add -b 34 -s 64k -t freebsd-boot ada${i}
-    $gpart add -s 4G -t freebsd-swap -l swap${i} ada${i}
-    $gpart add -t freebsd-zfs -l disk${i} ada${i}
+    $gpart add -a 4k -b 34 -s 64k -t freebsd-boot -l boot${i} ada${i}
+    $gpart add -a 4k -s 4G -t freebsd-swap -l swap${i} ada${i}
+    $gpart add -a 4k -t freebsd-zfs -l disk${i} ada${i}
     $gpart bootcode -b /boot/pmbr -p /boot/gptzfsboot -i 1 ada${i}
+    $gnop create -S 4096 /dev/gpt/disk${i}
     disklist="$disklist /dev/gpt/disk${i}"
     swaplist="$swaplist /dev/gpt/swap${i}"
   fi
@@ -66,22 +76,18 @@ $noprompt && echo ">> Partitions/boot done, ready to start ZFS... "
 $noprompt || read -p ">> Partitions/boot done, ready to start ZFS... (hit Enter) " junk
 echo ">> Disks: $disklist"
 
+# FIXME: what's this?
+#
 /sbin/sysctl kern.geom.debugflags=0x10
-/sbin/kldload zfs
-case "$type" in
-  raid)
-	$zpool create -f -o altroot=/mnt -o cachefile=/tmp/zpool.cache z raidz $disklist
-	;;
-  mirror)
-	#$zpool create -f -o altroot=/mnt -o cachefile=/tmp/zpool.cache z mirror $disklist
-	$zpool create -f -o altroot=/mnt -o cachefile=/tmp/zpool.cache z raidz $disklist
-	;;
-  *)
-	$zpool create -f -o altroot=/mnt -o cachefile=/tmp/zpool.cache z $disklist
-	;;
-esac
 
-$noprompt && echo ">> ZFS started, ready to create datasets... " 
+/sbin/kldload zfs
+
+$noprompt && echo ">> Creating a ${vdevtype}..."
+$noprompt || read -p ">> ZFS started, ready to create zpool... (hit Enter) " junk
+
+$zpool create -f -o altroot=/mnt -m / -o cachefile=/tmp/zpool.cache z ${vdevtype} $disklist
+
+$noprompt && echo ">> Ready to create datasets... " 
 $noprompt || read -p ">> ZFS started, ready to create datasets... (hit Enter) " junk
 
 set -x
@@ -116,8 +122,8 @@ $noprompt || read -p ">> ZFS prep done, ready to extract freebsd-dist... (hit En
 
 #ls /usr/freebsd-dist/*.txz | xargs -n 1 tar zxvf
 
-for dist in base doc games kernel lib32 ports src; do
-  total=$(tar ztvf /usr/freebsd-dist/${dist}.txz 2>&1 | wc -l)
+for dist in kernel base lib32 games doc src ports; do
+  total=$(tar ztvf /usr/freebsd-dist/${dist}.txz 2>&1 | sed -ne '$=')
   echo ">>> Extracting $dist ($total files)..."
   tar zxvf /usr/freebsd-dist/${dist}.txz 2>&1 | awk -v total="$total" '
   BEGIN {
@@ -193,10 +199,11 @@ echo ">> Datasets created, copying zpool.cache..."
 cp -p /tmp/zpool.cache /mnt/boot/zfs/
 
 echo ">> Resetting ZFS mountpoints..."
-$zfs set mountpoint=legacy z
-$zfs set mountpoint=/tmp z/tmp
-$zfs set mountpoint=/usr z/usr
-$zfs set mountpoint=/var z/var
+$zfs umount -a
+$zfs set mountpoint=legacy z && true
+$zfs set mountpoint=/tmp z/tmp && true
+$zfs set mountpoint=/usr z/usr && true
+$zfs set mountpoint=/var z/var && true
 
 echo ">> Exporting ZFS filesystem..."
 $zpool export z
