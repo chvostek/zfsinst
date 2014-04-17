@@ -1,24 +1,49 @@
 #!/bin/sh
 
+# https://github.com/chvostek/zfsinst
+
 # LiveCD:
 #
 #   # ifconfig re0 up
 #   # dhclient re0
 #   # scp ghoti@pc:bin/zfsinst /tmp/
 
+usage() {
+cat <<EOTu
+
+Usage: zfsinst [options]
+
+	where options are any of:
+	 -h	this help
+	 -v	be more verbose
+	 -d	show obscene amounts of debugging goop
+	 -q	be quiet (cancels verbose, suppress other output)
+	 -b	batch mode - assume default response to all questions
+	 -n	go through the motions but make no changes
+
+EOTu
+}
+
 set -e
 
-if df | grep -q ^z/; then
-	echo ">> Cleaning up previous install..."
-	zfs list | grep ^z/ | cut -f1 -d\  | sort -r | xargs -n 1 zfs destroy
-	zpool destroy z
-fi
+Debug=false; vflag=""; AskYN=true; NoPrompt=true; Doit=true; Doit_e=""; Quiet=false; qflag=""
+while getopts hvdqbn opt; do
+  case "$opt" in
+    h)  usage; exit 0 ;;
+    v)  Verbose=true; vflag="-v" ;;
+    q)  Verbose=false; vflag=""; Quit=true; qflag="-q" ;;
+    d)  Debug=true; Verbose=true; vflag="-v" ;;
+    b)  NoPrompt=true ;;
+    n)  Doit=false; Doit_e=echo ;;
+    *)  usage; exit 1 ;;
+  esac
+done
+shift `expr $OPTIND - 1`
 
-if [ "$1" = "-n" ]; then
-  noprompt=true
-  shift
-else
-  noprompt=false
+if df | grep -q ^z/; then
+  echo ">> Cleaning up previous install..."
+  zfs list | grep ^z/ | cut -f1 -d\  | sort -r | xargs -n 1 $Doit_e zfs destroy
+  $Doit_e zpool destroy z
 fi
 
 gpart=/sbin/gpart
@@ -40,12 +65,12 @@ fi
 
 if /sbin/kldstat -q -m zfs; then
   if $zpool status | grep -q "pool:"; then
-    if ! $zpool export $($zpool status | awk '$1=="pool:"{print $2;exit}'); then
+    if ! $Doit_e $zpool export $($zpool status | awk '$1=="pool:"{print $2;exit}'); then
       echo "ERROR: can't nuke existing pool." >&2
       kill $$
     fi
   fi
-  /sbin/kldunload zfs
+  $Doit && /sbin/kldunload zfs
 fi
 
 disklist=""
@@ -56,103 +81,114 @@ for ada in /dev/ada[0-9] /dev/ada[0-9][0-9]; do
   if [ -c "/dev/ada${i}" ]; then
     echo ""
     dmesg | sed -ne "/^ada${i}:/s/^/>>	/p"
-    read -p ">> Include /dev/ada${i} (Y/n)? " junk
-    case "$junk" in
-      N|n) continue ;;
-    esac
-    $gpart destroy -F ada${i} || /bin/true
-    $gpart create -s gpt ada${i}
-    $gpart add -a 4k -b 34 -s 64k -t freebsd-boot -l boot${i} ada${i}
-    $gpart add -a 4k -s 4G -t freebsd-swap -l swap${i} ada${i}
-    $gpart add -a 4k -t freebsd-zfs -l disk${i} ada${i}
-    $gpart bootcode -b /boot/pmbr -p /boot/gptzfsboot -i 1 ada${i}
-    $gnop create -S 4096 /dev/gpt/disk${i}
+    if $NoPrompt; then
+      echo ">> Including /dev/ada${i} ..."
+    else
+      read -p ">> Include /dev/ada${i} (Y/n)? " junk
+      case "$junk" in
+        N|n) continue ;;
+      esac
+    fi
+    $Doit_e $gpart destroy -F ada${i} || true
+    $Doit_e $gpart create -s gpt ada${i}
+    $Doit_e $gpart add -a 4k -b 34 -s 64k -t freebsd-boot -l boot${i} ada${i}
+    $Doit_e $gpart add -a 4k -s 4G -t freebsd-swap -l swap${i} ada${i}
+    $Doit_e $gpart add -a 4k -t freebsd-zfs -l disk${i} ada${i}
+    $Doit_e $gpart bootcode -b /boot/pmbr -p /boot/gptzfsboot -i 1 ada${i}
+    $Doit_e $gnop create -S 4096 /dev/gpt/disk${i}
     disklist="$disklist /dev/gpt/disk${i}"
     swaplist="$swaplist /dev/gpt/swap${i}"
   fi
 done
 
-$noprompt && echo ">> Partitions/boot done, ready to start ZFS... "
-$noprompt || read -p ">> Partitions/boot done, ready to start ZFS... (hit Enter) " junk
+$NoPrompt && echo ">> Partitions/boot done, ready to start ZFS... "
+$NoPrompt || read -p ">> Partitions/boot done, ready to start ZFS... (hit Enter) " junk
 echo ">> Disks: $disklist"
 
-# FIXME: what's this?
+# FIXME: what's this, again?
 #
 /sbin/sysctl kern.geom.debugflags=0x10
 
-/sbin/kldload zfs
+$Doit_e /sbin/kldload zfs
 
-$noprompt && echo ">> Creating a ${vdevtype}..."
-$noprompt || read -p ">> ZFS started, ready to create zpool... (hit Enter) " junk
+$NoPrompt && echo ">> Creating a ${vdevtype}..."
+$NoPrompt || read -p ">> ZFS started, ready to create zpool... (hit Enter) " junk
 
-$zpool create -f -o altroot=/mnt -m / -o cachefile=/tmp/zpool.cache z ${vdevtype} $disklist
+$Doit_e $zpool create -f -o altroot=/mnt -m / -o cachefile=/tmp/zpool.cache z ${vdevtype} $disklist
 
-$noprompt && echo ">> Ready to create datasets... " 
-$noprompt || read -p ">> ZFS started, ready to create datasets... (hit Enter) " junk
+$NoPrompt && echo ">> Ready to create datasets... " 
+$NoPrompt || read -p ">> ZFS started, ready to create datasets... (hit Enter) " junk
 
-set -x
+if $Debug; then
+	set -x
+fi
 
-cd /mnt
-$zpool set bootfs=z z
-$zfs set checksum=fletcher4 z
-$zfs create -o compression=on -o exec=on -o setuid=off z/tmp
-chmod 1777 tmp
-$zfs create z/usr
-$zfs create z/usr/home
-ln -s usr/home home
-$zfs create -o compression=lzjb -o setuid=off z/usr/ports
-$zfs create -o compression=off  -o exec=off -o setuid=off z/usr/ports/distfiles
-$zfs create -o compression=off  -o exec=off -o setuid=off z/usr/ports/packages
-$zfs create z/var
-$zfs create -o compression=lzjb -o exec=off -o setuid=off z/var/crash
-$zfs create                     -o exec=off -o setuid=off z/var/db
-$zfs create -o compression=lzjb -o exec=on  -o setuid=off z/var/db/pkg
-$zfs create                     -o exec=off -o setuid=off z/var/empty
-$zfs create -o compression=lzjb -o exec=off -o setuid=off z/var/log
-$zfs create -o compression=gzip -o exec=off -o setuid=off z/var/mail
-$zfs create                     -o exec=off -o setuid=off z/var/run
-$zfs create -o compression=lzjb -o exec=on  -o setuid=off z/var/tmp
-chmod 1777 var/tmp
-$zfs set readonly=on z/var/empty
+$Doit_e cd /mnt
+$Doit_e $zpool set bootfs=z z
+$Doit_e $zfs set checksum=fletcher4 z
+$Doit_e $zfs create -o compression=on -o exec=on -o setuid=off z/tmp
+$Doit_e chmod 1777 tmp
+$Doit_e $zfs create z/usr
+$Doit_e $zfs create z/usr/home
+$Doit_e ln -s usr/home home
+$Doit_e $zfs create -o compression=lzjb -o setuid=off z/usr/ports
+$Doit_e $zfs create -o compression=off  -o exec=off -o setuid=off z/usr/ports/distfiles
+$Doit_e $zfs create -o compression=off  -o exec=off -o setuid=off z/usr/ports/packages
+$Doit_e $zfs create z/var
+$Doit_e $zfs create -o compression=lzjb -o exec=off -o setuid=off z/var/crash
+$Doit_e $zfs create                     -o exec=off -o setuid=off z/var/db
+$Doit_e $zfs create -o compression=lzjb -o exec=on  -o setuid=off z/var/db/pkg
+$Doit_e $zfs create                     -o exec=off -o setuid=off z/var/empty
+$Doit_e $zfs create -o compression=lzjb -o exec=off -o setuid=off z/var/log
+$Doit_e $zfs create -o compression=gzip -o exec=off -o setuid=off z/var/mail
+$Doit_e $zfs create                     -o exec=off -o setuid=off z/var/run
+$Doit_e $zfs create -o compression=lzjb -o exec=on  -o setuid=off z/var/tmp
+$Doit_e chmod 1777 var/tmp
+$Doit_e $zfs set readonly=on z/var/empty
 
 set +x
 
-$noprompt && echo ">> ZFS prep done, ready to extract freebsd-dist... " 
-$noprompt || read -p ">> ZFS prep done, ready to extract freebsd-dist... (hit Enter) " junk
+$NoPrompt && echo ">> ZFS prep done, ready to extract freebsd-dist... " 
+$NoPrompt || read -p ">> ZFS prep done, ready to extract freebsd-dist... (hit Enter) " junk
 
 #ls /usr/freebsd-dist/*.txz | xargs -n 1 tar zxvf
 
 for dist in kernel base lib32 games doc src ports; do
   total=$(tar ztvf /usr/freebsd-dist/${dist}.txz 2>&1 | sed -ne '$=')
   echo ">>> Extracting $dist ($total files)..."
-  tar zxvf /usr/freebsd-dist/${dist}.txz 2>&1 | awk -v total="$total" '
-  BEGIN {
-    size=70
-    if (total>50000) {
-      mark=100
-    } else
-    if (total>10000) {
-      mark=10
-    } else {
-      mark=1
+  if $Doit; then
+    tar zxvf /usr/freebsd-dist/${dist}.txz 2>&1 | awk -v total="$total" '
+    BEGIN {
+      size=70
+      if (total>50000) {
+        mark=100
+      } else
+      if (total>10000) {
+        mark=10
+      } else {
+        mark=1
+      }
+      #mark=int(total/(size*10));
+      a=sprintf("%" size "s",0); gsub(/./,"*",a);
+      b=sprintf("%" size "s",0); gsub(/./,"-",b);
+      line=a b;
     }
-    #mark=int(total/(size*10));
-    a=sprintf("%" size "s",0); gsub(/./,"*",a);
-    b=sprintf("%" size "s",0); gsub(/./,"-",b);
-    line=a b;
-  }
-  NR%mark==0 {
-    printf("\r|%s|", substr(line, size-int(size*(NR/total)), size));
-  }
-  END {
-    printf("\r%" size+2 "s\r", " ");
-  }'
+    NR%mark==0 {
+      printf("\r|%s|", substr(line, size-int(size*(NR/total)), size));
+    }
+    END {
+      printf("\r%" size+2 "s\r", " ");
+    }'
+  else
+    $Doit_e tar zxvf /usr/freebsd-dist/${dist}.txz
+  fi
 done
 
 echo ">> Extraction done, configuring system... "
 
 echo ">>> /etc/rc.conf"
-cat <<-EOT1 >> etc/rc.conf
+if $Doit; then
+  cat <<-EOT1 >> etc/rc.conf
 
 	zfs_enable="YES"
 	hostname="install"
@@ -160,9 +196,11 @@ cat <<-EOT1 >> etc/rc.conf
 	ifconfig_re0="DHCP"
 
 	EOT1
+fi
 
 echo ">>> /boot/loader.conf"
-cat <<-EOT2 >> boot/loader.conf
+if $Doit; then
+  cat <<-EOT2 >> boot/loader.conf
 
 	zfs_load="YES"
 	vfs.root.mountfrom="zfs:z"
@@ -171,40 +209,46 @@ cat <<-EOT2 >> boot/loader.conf
 	#geom_mirror_load="YES"
 
 	EOT2
+fi
 
 echo ">>> /etc/fstab"
 fmt="\t%s\t\tnone\t\tswap\tsw\t0\t0\n"
-cat <<-EOT3 >> etc/fstab
+if $Doit; then
+  cat <<-EOT3 >> etc/fstab
 	# Device		Mountpoint	FStype	Options	Dump	Pass#
 
 `for i in $swaplist; do printf "$fmt" "$i"; done`
 	#/dev/mirror/swap	none		swap	sw	0	0
 
 	EOT3
-
+fi
 cd /
 
 #/sbin/kldload /boot/kernel/geom_mirror.ko
 #/sbin/gmirror label -b prefer swap gpt/swap0 gpt/swap1
 
 echo ">> Setting time zone..."
-$chroot /mnt tzsetup America/Toronto
+$Doit_e $chroot /mnt tzsetup America/Toronto
 echo ">> Making aliases..."
-$chroot /mnt sh -c "cd /etc/mail; make aliases"
+$Doit_e $chroot /mnt sh -c "cd /etc/mail; make aliases"
 
-$noprompt && echo ">> Finishing up..."
-$noprompt || read -p ">> Ready to finish up? (hit Enter) " junk
+$NoPrompt && echo ">> Finishing up..."
+$NoPrompt || read -p ">> Ready to finish up? (hit Enter) " junk
 
 echo ">> Datasets created, copying zpool.cache..."
-cp -p /tmp/zpool.cache /mnt/boot/zfs/
+$Doit_e cp -p /tmp/zpool.cache /mnt/boot/zfs/
 
 echo ">> Resetting ZFS mountpoints..."
-$zfs umount -a
-$zfs set mountpoint=legacy z && true
-$zfs set mountpoint=/tmp z/tmp && true
-$zfs set mountpoint=/usr z/usr && true
-$zfs set mountpoint=/var z/var && true
+if $Debug; then
+	set -x
+fi
+$Doit_e $zfs umount -a
+$Doit_e $zfs set mountpoint=legacy z && true
+$Doit_e $zfs set mountpoint=/tmp z/tmp && true
+$Doit_e $zfs set mountpoint=/usr z/usr && true
+$Doit_e $zfs set mountpoint=/var z/var && true
+set +x
 
 echo ">> Exporting ZFS filesystem..."
-$zpool export z
+$Doit_e $zpool export z
 
