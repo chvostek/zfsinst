@@ -2,12 +2,6 @@
 
 # https://github.com/chvostek/zfsinst
 
-# LiveCD:
-#
-#   # ifconfig re0 up
-#   # dhclient re0
-#   # scp ghoti@pc:bin/zfsinst /tmp/
-
 usage() {
 cat <<EOTu
 
