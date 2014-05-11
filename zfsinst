@@ -14,6 +14,7 @@ Usage: zfsinst [options]
 	 -q	be quiet (cancels verbose, suppress other output)
 	 -b	batch mode - assume default response to all questions
 	 -n	go through the motions but make no changes
+	 -z s	name the pool (default is "z")
 
 EOTu
 }
@@ -22,7 +23,7 @@ EOTu
 set -e
 
 # Set defaults
-Debug=false; vflag=""; AskYN=true; NoPrompt=true; Doit=true; Doit_e=""; Quiet=false; qflag=""
+Debug=false; vflag=""; AskYN=true; NoPrompt=true; Doit=true; Doit_e=""; Quiet=false; qflag=""; poolname="z"
 
 while getopts hvdqbn opt; do
   case "$opt" in
@@ -32,14 +33,26 @@ while getopts hvdqbn opt; do
     d)  Debug=true; Verbose=true; vflag="-v" ;;
     b)  NoPrompt=true ;;
     n)  Doit=false; Doit_e=echo ;;
+    z)  poolname="$OPTARG" ;;
     *)  usage; exit 1 ;;
   esac
 done
 shift `expr $OPTIND - 1`
 
-if df | grep -q ^z/; then
+if [ -z "$poolname" ]; then
+  echo "ERROR: pool name must not be empty" >&2
+  kill $$
+elif expr "$poolname" : '[^a-z]' >/dev/null; then
+  echo "ERROR: pool name must begin with a letter" >&2
+  kill $$
+elif expr "$poolname" : '.*[^a-z0-9]' >/dev/null; then
+  echo "ERROR: pool name must be alphanumeric" >&2
+  kill $$
+fi
+
+if df | grep -q ^${poolname}/; then
   echo ">> Cleaning up previous install..."
-  zfs list | grep ^z/ | cut -f1 -d\  | sort -r | xargs -n 1 $Doit_e zfs destroy
+  zfs list | grep ^${poolname}/ | cut -f1 -d\  | sort -r | xargs -n 1 $Doit_e zfs destroy
   $Doit_e zpool destroy z
 fi
 
@@ -129,25 +142,25 @@ fi
 $Doit_e cd /mnt
 $Doit_e $zpool set bootfs=z z
 $Doit_e $zfs set checksum=fletcher4 z
-$Doit_e $zfs create -o compression=on -o exec=on -o setuid=off z/tmp
+$Doit_e $zfs create -o compression=on -o exec=on -o setuid=off ${poolname}/tmp
 $Doit_e chmod 1777 tmp
-$Doit_e $zfs create z/usr
-$Doit_e $zfs create z/usr/home
+$Doit_e $zfs create ${poolname}/usr
+$Doit_e $zfs create ${poolname}/usr/home
 $Doit_e ln -s usr/home home
-$Doit_e $zfs create -o compression=lzjb -o setuid=off z/usr/ports
-$Doit_e $zfs create -o compression=off  -o exec=off -o setuid=off z/usr/ports/distfiles
-$Doit_e $zfs create -o compression=off  -o exec=off -o setuid=off z/usr/ports/packages
-$Doit_e $zfs create z/var
-$Doit_e $zfs create -o compression=lzjb -o exec=off -o setuid=off z/var/crash
-$Doit_e $zfs create                     -o exec=off -o setuid=off z/var/db
-$Doit_e $zfs create -o compression=lzjb -o exec=on  -o setuid=off z/var/db/pkg
-$Doit_e $zfs create                     -o exec=off -o setuid=off z/var/empty
-$Doit_e $zfs create -o compression=lzjb -o exec=off -o setuid=off z/var/log
-$Doit_e $zfs create -o compression=gzip -o exec=off -o setuid=off z/var/mail
-$Doit_e $zfs create                     -o exec=off -o setuid=off z/var/run
-$Doit_e $zfs create -o compression=lzjb -o exec=on  -o setuid=off z/var/tmp
+$Doit_e $zfs create -o compression=lzjb -o setuid=off ${poolname}/usr/ports
+$Doit_e $zfs create -o compression=off  -o exec=off -o setuid=off ${poolname}/usr/ports/distfiles
+$Doit_e $zfs create -o compression=off  -o exec=off -o setuid=off ${poolname}/usr/ports/packages
+$Doit_e $zfs create ${poolname}/var
+$Doit_e $zfs create -o compression=lzjb -o exec=off -o setuid=off ${poolname}/var/crash
+$Doit_e $zfs create                     -o exec=off -o setuid=off ${poolname}/var/db
+$Doit_e $zfs create -o compression=lzjb -o exec=on  -o setuid=off ${poolname}/var/db/pkg
+$Doit_e $zfs create                     -o exec=off -o setuid=off ${poolname}/var/empty
+$Doit_e $zfs create -o compression=lzjb -o exec=off -o setuid=off ${poolname}/var/log
+$Doit_e $zfs create -o compression=gzip -o exec=off -o setuid=off ${poolname}/var/mail
+$Doit_e $zfs create                     -o exec=off -o setuid=off ${poolname}/var/run
+$Doit_e $zfs create -o compression=lzjb -o exec=on  -o setuid=off ${poolname}/var/tmp
 $Doit_e chmod 1777 var/tmp
-$Doit_e $zfs set readonly=on z/var/empty
+$Doit_e $zfs set readonly=on ${poolname}/var/empty
 
 set +x
 
@@ -249,9 +262,9 @@ fi
 $Doit_e $zfs umount -a
 # These generate errors which it seems we can ignore
 $Doit_e $zfs set mountpoint=legacy z && true
-$Doit_e $zfs set mountpoint=/tmp z/tmp && true
-$Doit_e $zfs set mountpoint=/usr z/usr && true
-$Doit_e $zfs set mountpoint=/var z/var && true
+$Doit_e $zfs set mountpoint=/tmp ${poolname}/tmp && true
+$Doit_e $zfs set mountpoint=/usr ${poolname}/usr && true
+$Doit_e $zfs set mountpoint=/var ${poolname}/var && true
 set +x
 
 # It's a wrap
