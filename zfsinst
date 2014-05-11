@@ -18,9 +18,12 @@ Usage: zfsinst [options]
 EOTu
 }
 
+# Exit immediately if we encounter an error
 set -e
 
+# Set defaults
 Debug=false; vflag=""; AskYN=true; NoPrompt=true; Doit=true; Doit_e=""; Quiet=false; qflag=""
+
 while getopts hvdqbn opt; do
   case "$opt" in
     h)  usage; exit 0 ;;
@@ -40,6 +43,7 @@ if df | grep -q ^z/; then
   $Doit_e zpool destroy z
 fi
 
+# Common tools
 gpart=/sbin/gpart
 zpool=/sbin/zpool
 zfs=/sbin/zfs
@@ -48,6 +52,7 @@ chroot=/usr/sbin/chroot
 
 vdevtype=""
 
+# Auto-select volume type based on number of disks available
 if [ ! -c /dev/ada0 ]; then
   echo "ERROR: no ada0: I don't know where to install." >&2
   kill $$
@@ -57,6 +62,7 @@ elif [ -c /dev/ada1 ]; then
   vdevtype="mirror"
 fi
 
+# Load ZFS, eliminate any existing pool on-disk
 if /sbin/kldstat -q -m zfs; then
   if $zpool status | grep -q "pool:"; then
     if ! $Doit_e $zpool export $($zpool status | awk '$1=="pool:"{print $2;exit}'); then
@@ -67,6 +73,7 @@ if /sbin/kldstat -q -m zfs; then
   $Doit && /sbin/kldunload zfs
 fi
 
+# Partition all available disks
 disklist=""
 swaplist=""
 for ada in /dev/ada[0-9] /dev/ada[0-9][0-9]; do
@@ -113,10 +120,12 @@ $Doit_e $zpool create -f -o altroot=/mnt -m / -o cachefile=/tmp/zpool.cache z ${
 $NoPrompt && echo ">> Ready to create datasets... " 
 $NoPrompt || read -p ">> ZFS started, ready to create datasets... (hit Enter) " junk
 
+# xtrace, for debugging
 if $Debug; then
 	set -x
 fi
 
+# Create datasets for the various bit of the filesystem
 $Doit_e cd /mnt
 $Doit_e $zpool set bootfs=z z
 $Doit_e $zfs set checksum=fletcher4 z
@@ -147,6 +156,7 @@ $NoPrompt || read -p ">> ZFS prep done, ready to extract freebsd-dist... (hit En
 
 #ls /usr/freebsd-dist/*.txz | xargs -n 1 tar zxvf
 
+# Extract FreeBSD onto the newly minted datasets, with a progress bar
 for dist in kernel base lib32 games doc src ports; do
   total=$(tar ztvf /usr/freebsd-dist/${dist}.txz 2>&1 | sed -ne '$=')
   echo ">>> Extracting $dist ($total files)..."
@@ -237,12 +247,14 @@ if $Debug; then
 	set -x
 fi
 $Doit_e $zfs umount -a
+# These generate errors which it seems we can ignore
 $Doit_e $zfs set mountpoint=legacy z && true
 $Doit_e $zfs set mountpoint=/tmp z/tmp && true
 $Doit_e $zfs set mountpoint=/usr z/usr && true
 $Doit_e $zfs set mountpoint=/var z/var && true
 set +x
 
+# It's a wrap
 echo ">> Exporting ZFS filesystem..."
 $Doit_e $zpool export z
 
