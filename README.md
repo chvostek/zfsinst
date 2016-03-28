@@ -15,6 +15,7 @@ Install FreeBSD with root-on-ZFS.
 
 #### To-do:
 
+ * Integrate into [bsdinstall scripts](https://www.freebsd.org/cgi/man.cgi?bsdinstall(8)#SCRIPTING), or possibly
  * Provide a patch that modifies an existing memstick.img filesystem to provide `zfsinst` as an install option at the Welcome dialog in another dialog after **`<Install>`** is selected
  * Provide instructions for building an original memstick image (n.b. `man release` and `make memstick`)
  * Add overrides for filesystem layout (we currently assume layout based on number of raw devices)
